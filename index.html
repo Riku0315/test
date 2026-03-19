@@ -1,1 +1,251 @@
-嘉宮のテスト
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Square Hunter - Simple Action Game</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #222;
+            color: white;
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+        canvas {
+            background-color: #343;
+            border: 4px solid #555;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            cursor: crosshair;
+        }
+        .ui {
+            position: absolute;
+            top: 20px;
+            width: 760px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+        }
+        .bar-container {
+            width: 300px;
+            height: 20px;
+            background: #444;
+            border: 2px solid #000;
+        }
+        #hp-player { width: 100%; height: 100%; background: #2ecc71; transition: width 0.2s; }
+        #hp-boss { width: 100%; height: 100%; background: #e74c3c; transition: width 0.1s; }
+        .controls {
+            margin-top: 15px;
+            color: #aaa;
+            font-size: 0.9em;
+            text-align: center;
+        }
+        #msg {
+            position: absolute;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 2px 2px #000;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ui">
+        <div>PLAYER HP<div class="bar-container"><div id="hp-player"></div></div></div>
+        <div style="text-align: right;">BOSS HP<div class="bar-container"><div id="hp-boss"></div></div></div>
+    </div>
+
+    <div id="msg">MISSION ACCOMPLISHED</div>
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+
+    <div class="controls">
+        [WASD] 移動 | [J] 攻撃 (大剣風) | [K] 回避 (無敵時間あり) | [R] リスタート
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const hpPlayerBar = document.getElementById('hp-player');
+    const hpBossBar = document.getElementById('hp-boss');
+    const msg = document.getElementById('msg');
+
+    // ゲーム設定
+    const config = {
+        playerSpeed: 4,
+        rollSpeed: 10,
+        gravity: 0.5
+    };
+
+    let gameActive = true;
+
+    // プレイヤーオブジェクト
+    const player = {
+        x: 100, y: 400, w: 40, h: 40,
+        vx: 0, vy: 0,
+        hp: 100, maxHp: 100,
+        isAttacking: false,
+        attackCooldown: 0,
+        isRolling: false,
+        rollTimer: 0,
+        iframe: 0,
+        dir: 1 // 1: 右, -1: 左
+    };
+
+    // ボスオブジェクト (リオレウス的な何か)
+    const boss = {
+        x: 600, y: 300, w: 80, h: 80,
+        hp: 500, maxHp: 500,
+        state: 'idle', // idle, charge, attack, rage
+        timer: 0,
+        vx: 0, vy: 0,
+        color: '#e74c3c'
+    };
+
+    const keys = {};
+    window.addEventListener('keydown', e => {
+        keys[e.key.toLowerCase()] = true;
+        if(e.key === 'r') location.reload();
+    });
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+    function update() {
+        if (!gameActive) return;
+
+        // --- プレイヤー移動 ---
+        if (!player.isRolling && !player.isAttacking) {
+            if (keys['a']) { player.vx = -config.playerSpeed; player.dir = -1; }
+            else if (keys['d']) { player.vx = config.playerSpeed; player.dir = 1; }
+            else { player.vx = 0; }
+
+            // 回避
+            if (keys['k'] && player.rollTimer <= 0) {
+                player.isRolling = true;
+                player.rollTimer = 40;
+                player.iframe = 20; // 20フレームの無敵
+                player.vx = player.dir * config.rollSpeed;
+            }
+
+            // 攻撃
+            if (keys['j'] && player.attackCooldown <= 0) {
+                player.isAttacking = true;
+                player.attackCooldown = 50;
+                player.vx = player.dir * 2; // 踏み込み
+            }
+        }
+
+        // 物理演算
+        player.x += player.vx;
+        player.rollTimer--;
+        player.iframe--;
+        player.attackCooldown--;
+
+        if (player.rollTimer <= 0) player.isRolling = false;
+        if (player.attackCooldown < 30) player.isAttacking = false;
+
+        // 画面外防止
+        player.x = Math.max(0, Math.min(canvas.width - player.w, player.x));
+
+        // --- ボスAI ---
+        boss.timer--;
+        if (boss.timer <= 0) {
+            // 次の行動決定
+            const dist = player.x - boss.x;
+            if (Math.abs(dist) > 200) {
+                boss.state = 'charge'; // 突進
+                boss.vx = (dist > 0 ? 6 : -6);
+                boss.timer = 60;
+            } else {
+                boss.state = 'attack'; // 咆哮/周囲攻撃
+                boss.vx = 0;
+                boss.timer = 80;
+            }
+        }
+
+        boss.x += boss.vx;
+        if (boss.x < 0 || boss.x > canvas.width - boss.w) boss.vx *= -1;
+
+        // --- 当たり判定 ---
+        // プレイヤーの攻撃
+        if (player.isAttacking && player.attackCooldown > 35) {
+            const attackRange = 80;
+            const hit = player.dir === 1 
+                ? (player.x + player.w < boss.x + boss.w && player.x + player.w + attackRange > boss.x)
+                : (player.x > boss.x && player.x - attackRange < boss.x + boss.w);
+            
+            if (hit) {
+                boss.hp -= 2;
+                boss.color = 'white'; // ヒットストップ演出用
+            } else {
+                boss.color = '#e74c3c';
+            }
+        } else {
+            boss.color = boss.hp < 150 ? '#ff00ff' : '#e74c3c'; // 発狂モード色
+        }
+
+        // ボスの攻撃
+        const collision = player.x < boss.x + boss.w && player.x + player.w > boss.x;
+        if (collision && player.iframe <= 0) {
+            player.hp -= 1;
+            player.vx = (player.x < boss.x ? -10 : 10); // 吹き飛び
+        }
+
+        // UI更新
+        hpPlayerBar.style.width = Math.max(0, player.hp) + "%";
+        hpBossBar.style.width = (Math.max(0, boss.hp) / boss.maxHp * 100) + "%";
+
+        // 終了判定
+        if (player.hp <= 0) {
+            gameActive = false;
+            msg.innerText = "MISSION FAILED";
+            msg.style.display = "block";
+            msg.style.color = "#e74c3c";
+        }
+        if (boss.hp <= 0) {
+            gameActive = false;
+            msg.innerText = "MISSION ACCOMPLISHED";
+            msg.style.display = "block";
+            msg.style.color = "#f1c40f";
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 床
+        ctx.fillStyle = '#454';
+        ctx.fillRect(0, 440, canvas.width, 60);
+
+        // ボス
+        ctx.fillStyle = boss.color;
+        ctx.fillRect(boss.x, 440 - boss.h, boss.w, boss.h);
+        // ボスの予備動作エフェクト
+        if (boss.state === 'attack' && boss.timer > 60) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+            ctx.strokeRect(boss.x - 20, 440 - boss.h - 20, boss.w + 40, boss.h + 20);
+        }
+
+        // プレイヤー
+        ctx.fillStyle = player.iframe > 0 ? '#aaa' : '#2ecc71';
+        ctx.fillRect(player.x, 440 - player.h, player.w, player.h);
+
+        // 攻撃エフェクト
+        if (player.isAttacking && player.attackCooldown > 35) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            if (player.dir === 1) ctx.fillRect(player.x + player.w, 440 - player.h - 10, 80, 50);
+            else ctx.fillRect(player.x - 80, 440 - player.h - 10, 80, 50);
+        }
+
+        update();
+        requestAnimationFrame(draw);
+    }
+
+    draw();
+</script>
+</body>
+</html>
